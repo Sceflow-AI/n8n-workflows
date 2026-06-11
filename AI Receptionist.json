@@ -1,0 +1,1111 @@
+{
+  "name": "AI Receptionist",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chatbot",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -480,
+        -208
+      ],
+      "id": "54f92895-7bf8-49c5-9b9e-022aa620317f",
+      "name": "Webhook",
+      "webhookId": "0d1c11e2-1d0e-4462-a054-ae10bca55e55"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=## Context\nVisitor name: {{ $json.knownName || \"unknown\" }}\nVisitor email: {{ $json.knownEmail || \"not provided\" }}\nReturning visitor: {{ $json.isKnown || \"No\" }}\nName collected: {{ $json.hasName || \"No\" }}\nEmail collected: {{ $json.hasEmail || \"No\" }}\nMesasage: {{ $('Webhook').item.json.body.message }}",
+        "options": {
+          "systemMessage": "=## Overview\n\nYou are a friendly AI receptionist for an AI automation agency named 'Sceflow AI'.\n\nYour tasks:\n\n1. Reply naturally to the user's message.\n2. Extract the person's name if mentioned.\n3. Extract the person's email if mentioned.\n4. Keep replies short, conversational, and human.\n5. Never sound robotic, overly formal, or like an AI assistant.\n6. If the user provides a name or email, acknowledge it naturally.\n7. If the name or email is not present, return an empty string.\n\n---\n\n## Instructions\n\n* Respond as if you are chatting with a real person.\n* Keep replies under 2 sentences whenever possible and also include a emoji like 😊 or something like wheere ever it is required to make it more friendly.\n* Do not use phrases like:\n\n  * \"I'd be happy to assist.\"\n  * \"Thank you for reaching out.\"\n  * \"How may I help you today?\"\n* Sound friendly and relaxed.\n* Extract only information explicitly mentioned by the user.\n* If unsure about a name or email, leave it empty.\n* Return valid JSON only.\n* Do not include markdown.\n* Do not include explanations.\n* Do not include code fences.\n\n\n---\n\n## Output Format\n\n{\n\"reply\": \"...\",\n\"extractedName\": \"...\",\n\"extractedEmail\": \"...\"\n}\n\n---\n\n## Examples\n\nUser:\n\"Hi, my name is John Smith\"\n\nOutput:\n{\n\"reply\": \"Nice to meet you, John. What can I help you with today?\",\n\"extractedName\": \"John Smith\",\n\"extractedEmail\": \"\"\n}\n\nUser:\n\"My email is [johnsmith@gmail.com](mailto:johnsmith@gmail.com)\"\n\nOutput:\n{\n\"reply\": \"Got it, thanks for sharing that😊. What would you like help with?\",\n\"extractedName\": \"\",\n\"extractedEmail\": \"[johnsmith@gmail.com](mailto:johnsmith@gmail.com)\"\n}\n\nUser:\n\"Hi, I'm Sarah and my email is [sarah@gmail.com](mailto:sarah@gmail.com)\"\n\nOutput:\n{\n\"reply\": \"Nice to meet you, Sarah😊. What are you looking to automate?\",\n\"extractedName\": \"Sarah\",\n\"extractedEmail\": \"[sarah@gmail.com](mailto:sarah@gmail.com)\"\n}\n\nUser:\n\"I want to automate my repetitive CRM tasks\"\n\nOutput:\n{\n\"reply\": \"That sounds interesting🧐. What part of your CRM workflow takes the most time right now?\",\n\"extractedName\": \"\",\n\"extractedEmail\": \"\"\n}\n\nUser:\n\"Can you help me?\"\n\nOutput:\n{\n\"reply\": \"Absolutely. Tell me a little about what you're trying to achieve.\",\n\"extractedName\": \"\",\n\"extractedEmail\": \"\"\n}\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1024,
+        -96
+      ],
+      "id": "93424bba-a060-4833-b169-c859100a7442",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// SCEFLOW AI — CHATBOT CODE NODE (v3)\n// Parses AI JSON response\n// ============================================\n\nconst input = $input.first().json;\n\n// ─── GET RAW AI OUTPUT ─────────────────────\nconst rawOutput = input.output  || \n                  input.text    || \n                  input.aiReply || '';\n\n// ─── PARSE JSON FROM AI ────────────────────\nlet parsed = {};\ntry {\n  // Remove markdown code blocks if present\n  const cleaned = rawOutput\n    .replace(/```json/gi, '')\n    .replace(/```/g, '')\n    .trim();\n  \n  parsed = JSON.parse(cleaned);\n} catch(e) {\n  // AI didn't return JSON — use raw as reply\n  parsed = {\n    reply: rawOutput,\n    extractedName: null,\n    extractedEmail: null\n  };\n}\n\n// ─── INPUT VARIABLES ───────────────────────\nconst knownName    = input.knownName    || '';\nconst knownEmail   = input.knownEmail   || '';\nconst messageCount = parseInt(input.messageCount) || 0;\nconst userMessage  = input.userMessage  || '';\nconst sessionId    = input.sessionId    || '';\n\n// ─── EXTRACTED VALUES FROM AI ──────────────\nconst aiReply      = parsed.reply         || rawOutput;\nconst detectedName = parsed.extractedName  || null;\nconst detectedEmail= parsed.extractedEmail || null;\n\n// ─── FINAL MERGED VALUES ───────────────────\n// Keep existing known values if AI found nothing new\nconst finalName  = detectedName  || knownName  || null;\nconst finalEmail = detectedEmail || knownEmail || null;\n\n// ─── NEW CAPTURE FLAGS ─────────────────────\nconst newNameCaptured = !!(\n  detectedName &&\n  detectedName.toLowerCase() !== knownName.toLowerCase()\n);\n\nconst newEmailCaptured = !!(\n  detectedEmail &&\n  detectedEmail.toLowerCase() !== knownEmail.toLowerCase()\n);\n\nconst shouldUpdateSheet = newNameCaptured || newEmailCaptured;\n\n// ─── STATUS ────────────────────────────────\nlet status = 'Browsing';\nif (finalEmail)            status = 'Lead Captured';\nelse if (finalName)        status = 'Name Captured';\nelse if (messageCount > 2) status = 'Engaged';\n\n// ─── OUTPUT ────────────────────────────────\nreturn [{\n  json: {\n    ...input,\n\n    // Clean AI reply for chat widget\n    aiReply,\n\n    // Name and email\n    extractedName:        finalName,\n    extractedEmail:       finalEmail,\n    detectedName:         detectedName,\n    detectedEmail:        detectedEmail,\n\n    // Flags for IF nodes\n    newNameCaptured,\n    newEmailCaptured,\n    shouldUpdateSheet,\n\n    // Updated values\n    updatedMessageCount:  messageCount + 1,\n    knownName:            finalName  || knownName,\n    knownEmail:           finalEmail || knownEmail,\n    status,\n    sessionId,\n    userMessage\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        -96
+      ],
+      "id": "65b3d5c2-1123-423b-b061-6c85550e6e64",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        960,
+        80
+      ],
+      "id": "9f97463a-b8f5-4b2e-b73a-a758fcd710d7",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "t9tmUH44mB3YIzA9",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"reply\": \"{{ $('Code in JavaScript').item.json.aiReply }}\",\n  \"name\": \"{{ $('Code in JavaScript').item.json.extractedName }}\",\n  \"sessionId\": \"{{ $('Simplify it').item.json.sessionId }}\"\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2224,
+        -96
+      ],
+      "id": "a0a8e2c1-9073-4317-b1de-769ba1e4d6ce",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "19100f91-0c63-47d7-9c07-badd1c7743a2",
+              "name": "userMessage",
+              "value": "={{ $json.body.message }}",
+              "type": "string"
+            },
+            {
+              "id": "a851c81a-6971-4b59-ae90-d5dd2448ecfa",
+              "name": "sessionId",
+              "value": "={{ $json.body.sessionId }}",
+              "type": "string"
+            },
+            {
+              "id": "127980cb-cec6-4da4-a058-925115db5da4",
+              "name": "timestamp",
+              "value": "={{ $now.format('yyyy-MM-dd, h:mm a') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -448,
+        -16
+      ],
+      "id": "92d303dd-ae02-459f-965d-453c327f9d14",
+      "name": "Simplify it"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8c6ecca8-9e93-4a96-adfd-b23023f37694",
+              "name": "isKnown",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "700e19da-413e-4246-a7e2-06ea9d203713",
+              "name": "sessionFound",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "441f15b0-c4f0-45c3-bcd9-dfd0c8a6ece6",
+              "name": "knownName",
+              "value": "={{ $json.name || \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "ec27482e-1b6d-416b-887d-69baeef538b5",
+              "name": "knownEmail",
+              "value": "={{ $json.email || \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "2a2a9341-7aa9-4945-8186-dde95a467005",
+              "name": "hasName",
+              "value": "={{ $json.name ? true : false }}",
+              "type": "string"
+            },
+            {
+              "id": "e5f63c91-61d0-469c-bcd6-5be287b1d483",
+              "name": "hasEmail",
+              "value": "={{ $json.email ? true : false }}",
+              "type": "string"
+            },
+            {
+              "id": "205481b0-fc44-47e6-afc1-dee7df729c7c",
+              "name": "contact_id",
+              "value": "={{ $('Checking existing').item.json.id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        112,
+        -192
+      ],
+      "id": "4e743e37-c1d8-41c6-9279-ffdf488a376f",
+      "name": "Known person"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "987b75c8-cd8e-4dcb-adf4-b612ae3e252f",
+              "name": "isKnown",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "b8ced174-ef9e-44c0-b188-0e9166724fdf",
+              "name": "sessionFound",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "2db29250-c435-4590-abf2-06c76cfdf3fb",
+              "name": "knownName",
+              "value": "\"\"",
+              "type": "string"
+            },
+            {
+              "id": "fea61cfd-4344-4583-9f5b-c996eebc8e51",
+              "name": "knownEmail",
+              "value": "\"\"",
+              "type": "string"
+            },
+            {
+              "id": "293cda9e-708c-4605-82ff-1ae652ca3419",
+              "name": "hasName",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "bf77cf90-9efd-4b28-8818-d9c37f70b53a",
+              "name": "hasEmail",
+              "value": false,
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        16,
+        32
+      ],
+      "id": "93f05c98-1cd5-4a94-8305-a1c0d2ce4e0f",
+      "name": "Unknown person"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "012b1e57-129f-44f3-ae60-56f4a5227b3e",
+              "leftValue": "={{ $('Code in JavaScript').item.json.shouldUpdateSheet }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1536,
+        -96
+      ],
+      "id": "ff7675d8-c973-4c32-a6fd-3475fdf0f752",
+      "name": "If #2"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "aa844c03-e6d6-4a77-bfe6-59908a7ebe59",
+              "leftValue": "={{ $json.session_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -192,
+        -96
+      ],
+      "id": "3ccf254b-acf6-451d-9d18-d664177b647e",
+      "name": "If #1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "81071e44-5e5a-4638-8f30-7a4e6c131b48",
+              "leftValue": "={{ $('Code in JavaScript').item.json.newEmailCaptured }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1888,
+        -208
+      ],
+      "id": "cd4bee7f-1e35-4a2f-b0d9-2ecdd3d3c37a",
+      "name": "If #3"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT *\nFROM contacts\nWHERE session_id = $1",
+        "options": {
+          "queryReplacement": "={{ $json.sessionId }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -448,
+        192
+      ],
+      "id": "e9b320a3-9ea4-4cc8-9951-d522d53e9196",
+      "name": "Checking existing",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "whE6KLqx3CM9I3rq",
+          "name": "Lead qualification"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "value": "public",
+          "mode": "list",
+          "cachedResultName": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "conversations",
+          "mode": "list",
+          "cachedResultName": "conversations"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "session_id": "={{ $('Simplify it').item.json.sessionId }}",
+            "role": "user",
+            "message": "={{ $('Webhook').item.json.body.message }}",
+            "agent_name": "null",
+            "contact_id": "={{ $json.contact_id || $json.id }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "contact_id",
+              "displayName": "contact_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "session_id",
+              "displayName": "session_id",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "role",
+              "displayName": "role",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "agent_name",
+              "displayName": "agent_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        432,
+        -112
+      ],
+      "id": "6417794c-8cfb-4e55-9c71-fe061c199934",
+      "name": "Insert in conversation",
+      "credentials": {
+        "postgres": {
+          "id": "whE6KLqx3CM9I3rq",
+          "name": "Lead qualification"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT role, message\nFROM conversations\nWHERE contact_id = $1\nORDER BY created_at DESC\nLIMIT 20;",
+        "options": {
+          "queryReplacement": "={{ $('Known person').item.json.contact_id }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        816,
+        -224
+      ],
+      "id": "57dfe1f2-af54-4f53-a067-e73465190ba9",
+      "name": "Retrieve the previous 20 conversation",
+      "credentials": {
+        "postgres": {
+          "id": "whE6KLqx3CM9I3rq",
+          "name": "Lead qualification"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "value": "public",
+          "mode": "list",
+          "cachedResultName": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "conversations",
+          "mode": "list",
+          "cachedResultName": "conversations"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "message": "={{ $json.aiReply }}",
+            "role": "ai_assistant",
+            "agent_name": "reception_agent",
+            "session_id": "={{ $('Simplify it').item.json.sessionId }}",
+            "contact_id": "={{ $('Insert in conversation').item.json.contact_id }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "contact_id",
+              "displayName": "contact_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "session_id",
+              "displayName": "session_id",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "role",
+              "displayName": "role",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "agent_name",
+              "displayName": "agent_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1344,
+        112
+      ],
+      "id": "ba6e627f-bbe5-4d98-b0e1-e3db4b655970",
+      "name": "Insert in conversation #2",
+      "credentials": {
+        "postgres": {
+          "id": "whE6KLqx3CM9I3rq",
+          "name": "Lead qualification"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "0b62c0da-0fb9-4b2f-ad75-5c2cb6e13680",
+              "leftValue": "={{ $('Checking existing').item.json.session_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        608,
+        -112
+      ],
+      "id": "e8d2af62-d2d0-4da7-8f5d-be1678db9361",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO contacts (\n    session_id,\n    source\n)\nVALUES (\n    $1,\n    'chat_widget'\n)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ $('Simplify it').item.json.sessionId }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        192,
+        32
+      ],
+      "id": "a99f922d-ea3d-4aa0-a00d-7ddbf4e85495",
+      "name": "Execute a SQL query",
+      "credentials": {
+        "postgres": {
+          "id": "whE6KLqx3CM9I3rq",
+          "name": "Lead qualification"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "schema": {
+          "__rl": true,
+          "value": "public",
+          "mode": "list",
+          "cachedResultName": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "contacts",
+          "mode": "list",
+          "cachedResultName": "contacts"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "session_id": "={{ $('Simplify it').item.json.sessionId }}",
+            "name": "={{ $('Code in JavaScript').item.json.extractedName }}",
+            "email": "={{ $('Code in JavaScript').item.json.extractedEmail }}",
+            "lead_score": 0
+          },
+          "matchingColumns": [
+            "session_id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "session_id",
+              "displayName": "session_id",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "qualification_stage",
+              "displayName": "qualification_stage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "lead_score",
+              "displayName": "lead_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "assigned_agent",
+              "displayName": "assigned_agent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "first_seen",
+              "displayName": "first_seen",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "last_interaction",
+              "displayName": "last_interaction",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1728,
+        -208
+      ],
+      "id": "f310550a-60fc-4210-91b6-b8d060fba349",
+      "name": "Update the contact",
+      "credentials": {
+        "postgres": {
+          "id": "whE6KLqx3CM9I3rq",
+          "name": "Lead qualification"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "5",
+        "text": "5",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2064,
+        -224
+      ],
+      "id": "574e0eec-6619-4ff1-969a-2f23a21d3a93",
+      "name": "Send a text message",
+      "webhookId": "3fc46f24-a01f-4737-92ff-23fba9e40703",
+      "credentials": {
+        "telegramApi": {
+          "id": "c2xsaHZka2wgo1ke",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Simplify it",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Insert in conversation #2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simplify it": {
+      "main": [
+        [
+          {
+            "node": "Checking existing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Known person": {
+      "main": [
+        [
+          {
+            "node": "Insert in conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unknown person": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If #2": {
+      "main": [
+        [
+          {
+            "node": "Update the contact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If #1": {
+      "main": [
+        [
+          {
+            "node": "Known person",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unknown person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If #3": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Checking existing": {
+      "main": [
+        [
+          {
+            "node": "If #1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert in conversation": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve the previous 20 conversation": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert in conversation #2": {
+      "main": [
+        [
+          {
+            "node": "If #2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Retrieve the previous 20 conversation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute a SQL query": {
+      "main": [
+        [
+          {
+            "node": "Insert in conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update the contact": {
+      "main": [
+        [
+          {
+            "node": "If #3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "d8bfbff7-f73a-4ffd-83c2-ac0e159f623d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ed237ba222bdd22fb1ef66cb3d92930cfb9a9efa4227823e1079f5e4b221bbca"
+  },
+  "id": "Z2ls2WT83Syd6Iqo",
+  "tags": []
+}
